@@ -1,9 +1,10 @@
 volumes:
   nginx-shared:
+  postgres_data:
 
 services:
   nginx:
-    image: nginx:alpine
+    image: nginx:latest
     hostname: nginx
     ports:
       - "8000:8000"
@@ -40,6 +41,8 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready"]
       timeout: 5s
