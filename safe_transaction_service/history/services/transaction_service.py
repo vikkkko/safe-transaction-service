@@ -2,8 +2,9 @@ import logging
 import pickle
 import zlib
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any
 
 from django.conf import settings
 from django.db import connection
@@ -156,6 +157,7 @@ class TransactionService:
             for id_to_search, cached_txs in zip(
                 ids_to_search,
                 self.get_txs_from_cache(safe_address, ids_to_search),
+                strict=False,
             )
             if cached_txs
         }
@@ -287,7 +289,7 @@ class TransactionService:
             if result := ids_with_cached_txs.get(transaction_id):
                 return result
 
-            result: Optional[Union[MultisigTransaction, ModuleTransaction, EthereumTx]]
+            result: MultisigTransaction | ModuleTransaction | EthereumTx | None
             if result := ids_with_multisig_txs.get(transaction_id):
                 for multisig_tx in result:
                     # Populate transfers
@@ -379,11 +381,11 @@ class TransactionService:
     def get_export_transactions(
         self,
         safe_address: ChecksumAddress,
-        execution_date_gte: Optional[datetime] = None,
-        execution_date_lte: Optional[datetime] = None,
+        execution_date_gte: datetime | None = None,
+        execution_date_lte: datetime | None = None,
         limit: int = 1000,
         offset: int = 0,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         Get transactions optimized for CSV export using raw SQL queries
 
@@ -453,6 +455,8 @@ class TransactionService:
                 COALESCE(mt.origin->> 'note', '') as note,
                 encode(erc20.ethereum_tx_id, 'hex') as transaction_hash,
                 encode(COALESCE(mt.to, modtx.to), 'hex') as contract_address,
+                -- Just get the nonces from the provided Safe
+                CASE WHEN mt.safe = %s THEN mt.nonce ELSE NULL END AS nonce,
                 -- Assigns a row number to each ERC20 transfer grouped by tx and log index.
                 -- Prioritizes module > multisig > standalone using execution time as tiebreaker.
                 ROW_NUMBER() OVER (
@@ -493,6 +497,8 @@ class TransactionService:
                 COALESCE(mt.origin->> 'note', '') as note,
                 encode(erc721.ethereum_tx_id, 'hex') as transaction_hash,
                 encode(COALESCE(modtx.to, mt.to), 'hex') as contract_address,
+                -- Just get the nonces from the provided Safe
+                CASE WHEN mt.safe = %s THEN mt.nonce ELSE NULL END AS nonce,
                 -- Assigns a row number to each ERC721 transfer grouped by tx and log index.
                 -- Prioritizes module > multisig > standalone using execution time as tiebreaker.
                 ROW_NUMBER() OVER (
@@ -534,6 +540,8 @@ class TransactionService:
                 COALESCE(mt.origin->> 'note', '') as note,
                 encode(itx.ethereum_tx_id, 'hex') as transaction_hash,
                 encode(COALESCE(mt.to, modtx.to), 'hex') as contract_address,
+                -- Just get the nonces from the provided Safe
+                CASE WHEN mt.safe = %s THEN mt.nonce ELSE NULL END AS nonce,
                 -- Assigns a row number to each native transfer grouped by tx and log index.
                 -- Prioritizes module > multisig > standalone using execution time as tiebreaker.
                 ROW_NUMBER() OVER (
@@ -571,7 +579,8 @@ class TransactionService:
             executed_at,
             note,
             transaction_hash,
-            contract_address
+            contract_address,
+            nonce
         FROM export_data
         WHERE rn = 1
         ORDER BY execution_date DESC, transaction_hash
@@ -581,7 +590,7 @@ class TransactionService:
         safe_address_bytes = HexBytes(safe_address)
         main_params = [
             safe_address_bytes
-        ] * 12 + [  # 12 instances of safe address in the query
+        ] * 15 + [  # 15 instances of safe address in the query
             limit,
             offset,
         ]
@@ -629,7 +638,7 @@ class TransactionService:
             results = []
 
             for row in cursor.fetchall():
-                row_dict = dict(zip(columns, row))
+                row_dict = dict(zip(columns, row, strict=False))
 
                 # Map to serializer field names
                 export_item = {
@@ -674,6 +683,7 @@ class TransactionService:
                         if row_dict["contract_address"]
                         else None
                     ),
+                    "nonce": row_dict["nonce"],
                 }
                 results.append(export_item)
 

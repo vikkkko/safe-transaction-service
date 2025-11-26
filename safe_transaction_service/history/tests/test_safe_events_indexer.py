@@ -563,7 +563,7 @@ class TestSafeEventsIndexerV1_4_1(SafeTestCaseMixin, TestCase):
         multisig_tx.sign(owner_account_1.key)
         multisig_tx.execute(self.ethereum_test_account.key)
         # Process events: SafeMultiSigTransaction, ExecutionSuccess
-        self.assertEqual(self.safe_events_indexer.start(), (2, 1))
+        self.assertEqual(self.safe_events_indexer.start(), (3, 1))
         self.safe_tx_processor.process_decoded_transactions(
             list(txs_decoded_queryset.all())
         )
@@ -647,7 +647,6 @@ class TestSafeEventsIndexerV1_4_1(SafeTestCaseMixin, TestCase):
         )
 
         # Event processing should be idempotent, so no changes must be done if everything is processed again
-        self.assertTrue(self.safe_events_indexer._is_setup_indexed(safe_address))
         safe_l2_master_copy.tx_block_number = initial_block_number
         safe_l2_master_copy.save(update_fields=["tx_block_number"])
         blocks_processed = (
@@ -703,7 +702,7 @@ class TestSafeEventsIndexerV1_4_1(SafeTestCaseMixin, TestCase):
             ).build_transaction({"gas": 1, "gasPrice": 1})["data"]
         )
         initial_block_number = self.ethereum_client.current_block_number + 1
-        safe_l2_master_copy = SafeMasterCopyFactory(
+        SafeMasterCopyFactory(
             address=self.safe_contract.address,
             initial_block_number=initial_block_number,
             tx_block_number=initial_block_number,
@@ -747,14 +746,14 @@ class TestSafeEventsIndexerV1_4_1(SafeTestCaseMixin, TestCase):
                 EthereumTxFactory(tx_hash=tx_hash, block__block_hash=block_hash)
 
         # After the first processing transactions will be cached to prevent reprocessing
-        processed_element_cache = (
-            self.safe_events_indexer.element_already_processed_checker._processed_element_cache
-        )
+        processed_element_cache = self.safe_events_indexer.element_already_processed_checker._processed_element_cache
         self.assertEqual(len(processed_element_cache), 0)
         self.assertEqual(
-            len(self.safe_events_indexer.process_elements(safe_events_mock)), 28
+            len(self.safe_events_indexer.process_elements(safe_events_mock)), 29
         )
-        self.assertEqual(len(processed_element_cache), 28)
+        self.assertEqual(
+            len(processed_element_cache), 28
+        )  # Child internal txs (Ether transfers) don't count
 
         # Transactions are cached and will not be reprocessed
         self.assertEqual(
@@ -832,9 +831,8 @@ class TestSafeEventsIndexerV1_4_1(SafeTestCaseMixin, TestCase):
         )
 
     def test_proxy_creation_event_without_initializer(self):
-
         initial_block_number = self.ethereum_client.current_block_number + 1
-        safe_l2_master_copy = SafeMasterCopyFactory(
+        SafeMasterCopyFactory(
             address=self.safe_contract.address,
             initial_block_number=initial_block_number,
             tx_block_number=initial_block_number,
@@ -882,7 +880,7 @@ class TestSafeEventsIndexerV1_4_1(SafeTestCaseMixin, TestCase):
             {"nonce": self.w3.eth.get_transaction_count(owner_account_1.address)}
         )
         signed_tx = owner_account_1.sign_transaction(setup_call)
-        tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+        w3.eth.send_raw_transaction(signed_tx.raw_transaction)
         self.assertEqual(self.safe_events_indexer.start(), (1, 1))
         # We remove the proxyCreation internaltx
         self.assertEqual(InternalTx.objects.count(), 1)
@@ -910,7 +908,7 @@ class TestSafeEventsIndexerV1_4_1(SafeTestCaseMixin, TestCase):
             {"nonce": self.w3.eth.get_transaction_count(owner_account_1.address)}
         )
         signed_tx = owner_account_1.sign_transaction(setup_call)
-        tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+        w3.eth.send_raw_transaction(signed_tx.raw_transaction)
         self.assertEqual(self.safe_events_indexer.start(), (2, 2))
         # Proxy creation InternalTx must contain the Safe address
         self.assertEqual(

@@ -1,7 +1,9 @@
 from abc import abstractmethod
+from collections import OrderedDict
+from collections.abc import Sequence
 from functools import cached_property
 from logging import getLogger
-from typing import Any, Optional, OrderedDict, Sequence
+from typing import Any
 
 from django.conf import settings
 
@@ -123,10 +125,9 @@ class EventsIndexer(EthereumIndexer):
             ]
 
             with self.auto_adjust_block_limit(from_block_number, to_block_number):
-                # Check how long the first job takes
-                gevent.joinall(jobs[:1])
+                # Check how long all the jobs take
+                gevent.joinall(jobs, raise_error=True)
 
-            gevent.joinall(jobs)
             return [log_receipt for job in jobs for log_receipt in job.get()]
         else:
             with self.auto_adjust_block_limit(from_block_number, to_block_number):
@@ -149,7 +150,7 @@ class EventsIndexer(EthereumIndexer):
 
         try:
             return self._do_node_query(addresses, from_block_number, to_block_number)
-        except IOError as e:
+        except OSError as e:
             raise FindRelevantElementsException(
                 f"Request error retrieving events "
                 f"from-block={from_block_number} to-block={to_block_number}"
@@ -180,7 +181,7 @@ class EventsIndexer(EthereumIndexer):
         addresses: set[ChecksumAddress],
         from_block_number: int,
         to_block_number: int,
-        current_block_number: Optional[int] = None,
+        current_block_number: int | None = None,
     ) -> list[LogReceipt]:
         """
         Search for log receipts for Safe events
@@ -215,7 +216,7 @@ class EventsIndexer(EthereumIndexer):
         )
         return log_receipts
 
-    def decode_element(self, log_receipt: LogReceipt) -> Optional[EventData]:
+    def decode_element(self, log_receipt: LogReceipt) -> EventData | None:
         """
         :param log_receipt:
         :return: Decode `log_receipt` using all the possible ABIs for the topic. Returns `EventData` if successful,

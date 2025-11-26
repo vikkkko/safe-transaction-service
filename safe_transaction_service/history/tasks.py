@@ -3,7 +3,6 @@ import dataclasses
 import datetime
 import json
 import random
-from typing import Optional
 
 from django.conf import settings
 from django.utils import timezone
@@ -14,7 +13,6 @@ from eth_typing import ChecksumAddress
 from redis.exceptions import LockError
 
 from safe_transaction_service.utils.redis import get_redis
-from safe_transaction_service.utils.utils import close_gevent_db_connection_decorator
 
 from ..events.services.queue_service import get_queue_service
 from ..utils.celery import task_timeout
@@ -52,7 +50,7 @@ logger = get_task_logger(__name__)
 
 @app.shared_task(bind=True)
 @task_timeout(timeout_seconds=LOCK_TIMEOUT)
-def check_reorgs_task(self) -> Optional[int]:
+def check_reorgs_task(self) -> int | None:
     """
     :return: Number of the oldest block with reorg detected. `None` if not reorg found
     """
@@ -95,7 +93,7 @@ def check_sync_status_task() -> bool:
     retry_kwargs={"max_retries": 3},
 )
 @task_timeout(timeout_seconds=LOCK_TIMEOUT)
-def index_erc20_events_task(self) -> Optional[tuple[int, int]]:
+def index_erc20_events_task(self) -> tuple[int, int] | None:
     """
     Find and process ERC20/721 events for monitored addresses
 
@@ -115,13 +113,12 @@ def index_erc20_events_task(self) -> Optional[tuple[int, int]]:
 
 
 @app.shared_task
-@close_gevent_db_connection_decorator
 def index_erc20_events_out_of_sync_task(
-    block_process_limit: Optional[int] = None,
-    block_process_limit_max: Optional[int] = None,
-    addresses: Optional[list[ChecksumAddress]] = None,
-    number_of_addresses: Optional[int] = 100,
-) -> Optional[int]:
+    block_process_limit: int | None = None,
+    block_process_limit_max: int | None = None,
+    addresses: list[ChecksumAddress] | None = None,
+    number_of_addresses: int | None = 100,
+) -> int | None:
     """
     Find and process ERC20/721 events for monitored addresses out of sync (really behind)
 
@@ -181,7 +178,7 @@ def index_erc20_events_out_of_sync_task(
     retry_kwargs={"max_retries": 3},
 )
 @task_timeout(timeout_seconds=LOCK_TIMEOUT)
-def index_internal_txs_task(self) -> Optional[tuple[int, int]]:
+def index_internal_txs_task(self) -> tuple[int, int] | None:
     """
     Find and process internal txs for monitored addresses
     :return: Tuple of number of addresses processed and number of blocks processed
@@ -208,7 +205,7 @@ def index_internal_txs_task(self) -> Optional[tuple[int, int]]:
     retry_kwargs={"max_retries": 3},
 )
 @task_timeout(timeout_seconds=LOCK_TIMEOUT)
-def index_new_proxies_task(self) -> Optional[tuple[int, int]]:
+def index_new_proxies_task(self) -> tuple[int, int] | None:
     """
     :return: Tuple of number of proxies created and number of blocks processed
     """
@@ -230,7 +227,7 @@ def index_new_proxies_task(self) -> Optional[tuple[int, int]]:
     retry_kwargs={"max_retries": 3},
 )
 @task_timeout(timeout_seconds=LOCK_TIMEOUT)
-def index_safe_events_task(self) -> Optional[tuple[int, int]]:
+def index_safe_events_task(self) -> tuple[int, int] | None:
     """
     Find and process for monitored addresses
     :return: Tuple of number of addresses processed and number of blocks processed
@@ -249,7 +246,7 @@ def index_safe_events_task(self) -> Optional[tuple[int, int]]:
 
 @app.shared_task(bind=True)
 @task_timeout(timeout_seconds=LOCK_TIMEOUT)
-def process_decoded_internal_txs_task(self) -> Optional[int]:
+def process_decoded_internal_txs_task(self) -> int | None:
     with contextlib.suppress(LockError):
         with only_one_running_task(self):
             if settings.PROCESSING_ALL_SAFES_TOGETHER:
@@ -265,9 +262,7 @@ def process_decoded_internal_txs_task(self) -> Optional[int]:
                     "Start process decoded internal txs for every Safe in a different task"
                 )
                 count = 0
-                for (
-                    safe_to_process
-                ) in (
+                for safe_to_process in (
                     InternalTxDecoded.objects.safes_pending_to_be_processed().iterator()
                 ):
                     process_decoded_internal_txs_for_safe_task.delay(
@@ -287,7 +282,7 @@ def process_decoded_internal_txs_task(self) -> Optional[int]:
 @task_timeout(timeout_seconds=LOCK_TIMEOUT)
 def process_decoded_internal_txs_for_safe_task(
     self, safe_address: ChecksumAddress, reindex_master_copies: bool = True
-) -> Optional[int]:
+) -> int | None:
     """
     Process decoded internal txs for one Safe. Processing decoded transactions
     could be slow and this way multiple Safes can be processed at the same time
@@ -390,12 +385,19 @@ def reindex_erc20_erc721_last_hours_task(self, hours: float = 2.5) -> bool:
 def reindex_master_copies_task(
     self,
     from_block_number: int,
-    to_block_number: Optional[int] = None,
-    addresses: Optional[ChecksumAddress] = None,
+    to_block_number: int | None = None,
+    addresses: ChecksumAddress | None = None,
 ) -> None:
     """
-    Reindexes master copies
+    Reindex master copies
+
+    :param self:
+    :param from_block_number:
+    :param to_block_number:
+    :param addresses:
+    :return:
     """
+
     with contextlib.suppress(LockError):
         with only_one_running_task(
             self, lock_name_suffix=str(addresses) if addresses else None
@@ -417,11 +419,17 @@ def reindex_master_copies_task(
 def reindex_erc20_events_task(
     self,
     from_block_number: int,
-    to_block_number: Optional[int] = None,
-    addresses: Optional[ChecksumAddress] = None,
+    to_block_number: int | None = None,
+    addresses: ChecksumAddress | None = None,
 ) -> None:
     """
-    Reindexes master copies
+    Reindex erc20 events
+
+    :param self:
+    :param from_block_number:
+    :param to_block_number:
+    :param addresses:
+    :return:
     """
     with contextlib.suppress(LockError):
         with only_one_running_task(
@@ -443,7 +451,7 @@ def reindex_erc20_events_task(
 @task_timeout(timeout_seconds=LOCK_TIMEOUT)
 def retry_get_metadata_task(
     address: ChecksumAddress, token_id: int
-) -> Optional[CollectibleWithMetadata]:
+) -> CollectibleWithMetadata | None:
     """
     Retry to get metadata from an uri that during the first try returned a timeout error.
 
@@ -521,7 +529,6 @@ def retry_get_metadata_task(
 
 
 @app.shared_task()
-@close_gevent_db_connection_decorator
 def remove_not_trusted_multisig_txs_task(
     time_delta: datetime.timedelta = datetime.timedelta(days=30),
 ) -> int:
@@ -535,7 +542,6 @@ def remove_not_trusted_multisig_txs_task(
 
 
 @app.shared_task()
-@close_gevent_db_connection_decorator
 def delete_expired_delegates_task():
     logger.info("Deleting expired Safe Delegates")
     now = timezone.now()

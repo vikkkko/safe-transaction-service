@@ -1,5 +1,5 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
@@ -146,21 +146,6 @@ TASKS = [
         cron=CronDefinition(minute=0),  # Every hour at minute 0 - 0 * * * *
     ),
     CeleryTaskConfiguration(
-        name="safe_transaction_service.contracts.tasks.create_missing_contracts_with_metadata_task",
-        description="Index contract names and ABIs (every hour at minute 0)",
-        cron=CronDefinition(minute=0),  # Every hour at minute 0 - 0 * * * *
-    ),
-    CeleryTaskConfiguration(
-        name="safe_transaction_service.contracts.tasks.create_missing_multisend_contracts_with_metadata_task",
-        description="Index contract names and ABIs from MultiSend transactions (every 6 hours at minute 0)",
-        cron=CronDefinition(minute=0, hour="*/6"),  # Every 6 hours - 0 */6 * * *
-    ),
-    CeleryTaskConfiguration(
-        name="safe_transaction_service.contracts.tasks.reindex_contracts_without_metadata_task",
-        description="Reindex contracts with missing names or ABIs (every sunday at 00:00)",
-        cron=CronDefinition(minute=0, hour=0, day_of_week=0),  # Every sunday 0 0 * * 0
-    ),
-    CeleryTaskConfiguration(
         name="safe_transaction_service.tokens.tasks.fix_pool_tokens_task",
         description="Fix Pool Token Names (every hour at minute 0)",
         cron=CronDefinition(minute=0),  # Every hour at minute 0 - 0 * * * *
@@ -192,11 +177,11 @@ class Command(BaseCommand):
             _, created = task.create_task()
             if created:
                 self.stdout.write(
-                    self.style.SUCCESS("Created Periodic Task %s" % task.name)
+                    self.style.SUCCESS(f"Created Periodic Task {task.name}")
                 )
             else:
                 self.stdout.write(
-                    self.style.SUCCESS("Task %s was already created" % task.name)
+                    self.style.SUCCESS(f"Task {task.name} was already created")
                 )
 
         self.stdout.write(self.style.SUCCESS("Setting up Safe Contract Addresses"))

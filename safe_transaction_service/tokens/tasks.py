@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
 from django.db import transaction
 from django.utils import timezone
@@ -13,7 +12,6 @@ from safe_eth.eth.utils import fast_to_checksum_address
 from web3.exceptions import Web3Exception
 
 from safe_transaction_service.utils.ethereum import get_ethereum_network
-from safe_transaction_service.utils.utils import close_gevent_db_connection_decorator
 
 from ..utils.celery import task_timeout
 from .exceptions import TokenListRetrievalException
@@ -45,9 +43,8 @@ class EthValueWithTimestamp:
 
 
 @app.shared_task()
-@close_gevent_db_connection_decorator
 @task_timeout(timeout_seconds=TASK_TIME_LIMIT)
-def fix_pool_tokens_task() -> Optional[int]:
+def fix_pool_tokens_task() -> int | None:
     """
     Fix names for generic pool tokens, like Balancer or Uniswap
 
@@ -62,7 +59,7 @@ def fix_pool_tokens_task() -> Optional[int]:
 
 def _parse_token_address_from_token_list(
     token_address: str,
-) -> Optional[ChecksumAddress]:
+) -> ChecksumAddress | None:
     if token_address.startswith("0x"):  # Ignore ENS names
         return fast_to_checksum_address(token_address)
     else:
@@ -77,7 +74,6 @@ def _parse_token_address_from_token_list(
 
 
 @app.shared_task()
-@close_gevent_db_connection_decorator
 def update_token_info_from_token_list_task() -> int:
     """
     If there's at least one valid token list with at least 1 token, every token in the DB is marked as `not trusted`
@@ -122,9 +118,23 @@ def update_token_info_from_token_list_task() -> int:
                 update_fields["logo_uri"] = logo_uri
                 name = token.get("name")
                 if name:
+                    if len(name) > 60:
+                        # NameField has a limit of 60 chars
+                        logger.warning(
+                            "Token %s name exceeds 60 characters and was trimmed",
+                            token_address,
+                        )
+                        name = name[:60]
                     update_fields["name"] = name
                 symbol = token.get("symbol")
                 if symbol:
+                    if len(symbol) > 60:
+                        # SymbolField has a limit of 60 chars
+                        logger.warning(
+                            "Token %s symbol exceeds 60 characters and was trimmed",
+                            token_address,
+                        )
+                        symbol = symbol[:60]
                     update_fields["symbol"] = symbol
                 tokens_updated_count += Token.objects.filter(
                     address=token_address
