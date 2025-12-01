@@ -119,6 +119,7 @@ class MultisigTransactionFilter(filters.FilterSet):
     class Meta:
         model = MultisigTransaction
         fields = {
+            "channel": ["exact"],
             "failed": ["exact"],
             "modified": ["lt", "gt", "lte", "gte"],
             "nonce": ["lt", "gt", "lte", "gte", "exact"],

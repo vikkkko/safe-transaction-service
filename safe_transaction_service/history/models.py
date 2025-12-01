@@ -1611,6 +1611,7 @@ class MultisigTransaction(TimeStampedModel):
     gas_token = EthereumAddressBinaryField(null=True, blank=True)
     refund_receiver = EthereumAddressBinaryField(null=True, blank=True)
     signatures = models.BinaryField(null=True, blank=True)  # When tx is executed
+    channel = models.BigIntegerField(default=0, db_index=True)  # Channel for multichannel nonce support
     nonce = Uint256Field(db_index=True)
     failed = models.BooleanField(null=True, blank=True, default=None, db_index=True)
     origin = models.JSONField(default=dict)  # To store arbitrary data on the tx
@@ -1626,6 +1627,16 @@ class MultisigTransaction(TimeStampedModel):
             Index(
                 name="history_multisigtx_safe_sorted",
                 fields=["safe", "-nonce", "-created"],
+            ),
+            Index(
+                name="hist_mtx_safe_ch_nonce",
+                fields=["safe", "channel", "nonce"],
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["safe", "channel", "nonce"],
+                name="unique_safe_channel_nonce",
             ),
         ]
 
@@ -1654,6 +1665,7 @@ class MultisigTransaction(TimeStampedModel):
             "signatures": (
                 to_0x_hex_str(HexBytes(self.signatures)) if self.signatures else None
             ),
+            "channel": self.channel,
             "nonce": self.nonce,
             "failed": self.failed,
             "origin": self.origin,

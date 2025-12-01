@@ -30,6 +30,11 @@ urlpatterns = [
     path("data-decoder/", views.DataDecoderView.as_view(), name="data-decoder"),
     path("safes/<str:address>/", views.SafeInfoView.as_view(), name="safe-info"),
     path(
+        "safes/<str:address>/nonces/",
+        views.SafeMultichannelNonceView.as_view(),
+        name="safe-nonces",
+    ),
+    path(
         "safes/<str:address>/multisig-transactions/",
         views.SafeMultisigTransactionListView.as_view(),
         name="multisig-transactions",

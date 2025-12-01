@@ -1129,6 +1129,90 @@ class SafeInfoView(GenericAPIView):
             )
 
 
+class SafeMultichannelNonceView(GenericAPIView):
+    """
+    Get multichannel nonce information for a Safe
+    """
+
+    serializer_class = serializers.SafeMultichannelNonceResponseSerializer
+    pagination_class = None
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                name="channel",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                description="Channel number (optional, defaults to 0-9)",
+                required=False,
+            ),
+        ],
+        responses={
+            200: serializers.SafeMultichannelNonceResponseSerializer(
+                many=True
+            ),
+            404: OpenApiResponse(description="Safe not found"),
+            422: OpenApiResponse(
+                description="Checksum address validation failed"
+            ),
+        },
+    )
+    def get(self, request, address, *args, **kwargs):
+        """
+        Returns multichannel nonce information for a Safe account
+        """
+        from .utils import get_channel_nonce, get_safe_version, supports_multichannel
+
+        if not fast_is_checksum_address(address):
+            return Response(
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                data={
+                    "code": 1,
+                    "message": "Checksum address validation failed",
+                    "arguments": [address],
+                },
+            )
+
+        if not SafeContract.objects.filter(address=address).exists():
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        ethereum_client = get_auto_ethereum_client()
+
+        # Check if Safe supports multichannel
+        safe_version = get_safe_version(ethereum_client, address)
+        is_multichannel = supports_multichannel(safe_version)
+
+        # Get channel parameter from query string
+        channel_param = request.query_params.get("channel")
+
+        if channel_param is not None:
+            # Get nonce for specific channel
+            try:
+                channel = int(channel_param)
+                nonce = get_channel_nonce(ethereum_client, address, channel)
+                return Response(
+                    status=status.HTTP_200_OK,
+                    data=[{"channel": channel, "nonce": str(nonce)}],
+                )
+            except ValueError:
+                return Response(
+                    status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    data={
+                        "code": 2,
+                        "message": "Invalid channel parameter",
+                        "arguments": [channel_param],
+                    },
+                )
+        else:
+            # Return nonces for first 10 channels (0-9)
+            nonces = []
+            max_channels = 10 if is_multichannel else 1
+            for ch in range(max_channels):
+                nonce = get_channel_nonce(ethereum_client, address, ch)
+                nonces.append({"channel": ch, "nonce": str(nonce)})
+            return Response(status=status.HTTP_200_OK, data=nonces)
+
+
 class ModulesView(GenericAPIView):
     serializer_class = serializers.ModulesResponseSerializer
     pagination_class = None  # Don't show limit/offset in swagger

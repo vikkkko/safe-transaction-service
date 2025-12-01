@@ -58,6 +58,11 @@ from .models import (
     TransferDict,
 )
 from .services.safe_service import SafeCreationInfo
+from .utils import (
+    calculate_safe_tx_hash_multichannel,
+    get_safe_version,
+    supports_multichannel,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,23 +109,33 @@ class SafeMultisigConfirmationSerializer(serializers.Serializer):
 
         safe_address = multisig_transaction.safe
         ethereum_client = get_auto_ethereum_client()
-        safe = Safe(safe_address, ethereum_client)
-        safe_tx = safe.build_multisig_tx(
-            multisig_transaction.to,
-            multisig_transaction.value,
-            multisig_transaction.data,
-            multisig_transaction.operation,
-            multisig_transaction.safe_tx_gas,
-            multisig_transaction.base_gas,
-            multisig_transaction.gas_price,
-            multisig_transaction.gas_token,
-            multisig_transaction.refund_receiver,
-            safe_nonce=multisig_transaction.nonce,
-        )
+
+        # Check if multichannel version
+        safe_version = get_safe_version(ethereum_client, safe_address)
+        is_multichannel = supports_multichannel(safe_version)
+        channel = multisig_transaction.channel
+
+        # Build safe_tx for hash_preimage (only for non-multichannel)
+        safe_hash_preimage = None
+        if not (is_multichannel and channel > 0):
+            safe = Safe(safe_address, ethereum_client)
+            safe_tx = safe.build_multisig_tx(
+                multisig_transaction.to,
+                multisig_transaction.value,
+                multisig_transaction.data,
+                multisig_transaction.operation,
+                multisig_transaction.safe_tx_gas,
+                multisig_transaction.base_gas,
+                multisig_transaction.gas_price,
+                multisig_transaction.gas_token,
+                multisig_transaction.refund_receiver,
+                safe_nonce=multisig_transaction.nonce,
+            )
+            safe_hash_preimage = safe_tx.safe_tx_hash_preimage
 
         safe_owners = get_safe_owners(safe_address)
         parsed_signatures = SafeSignature.parse_signature(
-            signature, safe_tx_hash, safe_hash_preimage=safe_tx.safe_tx_hash_preimage
+            signature, safe_tx_hash, safe_hash_preimage=safe_hash_preimage
         )
         signature_owners = []
         ethereum_client = get_auto_ethereum_client()
@@ -181,6 +196,8 @@ class SafeMultisigTransactionSerializer(SafeMultisigTxSerializer):
         allow_null=True, required=False, min_length=65
     )  # Signatures must be at least 65 bytes
     origin = serializers.CharField(max_length=200, allow_null=True, default=None)
+    # Channel for multichannel nonce support
+    channel = serializers.IntegerField(default=0, min_value=0)
 
     def validate_origin(self, origin):
         # Origin field on db is a JsonField
@@ -208,33 +225,65 @@ class SafeMultisigTransactionSerializer(SafeMultisigTxSerializer):
 
         ethereum_client = get_auto_ethereum_client()
         safe_address = attrs["safe"]
+        channel = attrs["channel"]
 
-        safe = Safe(safe_address, ethereum_client)
-        safe_tx = safe.build_multisig_tx(
-            tx_to,
-            attrs["value"],
-            attrs["data"],
-            tx_operation,
-            attrs["safe_tx_gas"],
-            attrs["base_gas"],
-            attrs["gas_price"],
-            attrs["gas_token"],
-            attrs["refund_receiver"],
-            safe_nonce=attrs["nonce"],
-        )
-        safe_tx_hash = safe_tx.safe_tx_hash
+        # Check Safe version and determine if multichannel is supported
+        safe_version = get_safe_version(ethereum_client, safe_address)
+        is_multichannel = supports_multichannel(safe_version)
+
+        # Calculate safe tx hash based on version
+        if is_multichannel:
+            # Use multichannel hash calculation
+            safe_tx_hash = calculate_safe_tx_hash_multichannel(
+                ethereum_client,
+                safe_address,
+                channel,
+                tx_to,
+                attrs["value"],
+                attrs["data"] if attrs["data"] else b"",
+                tx_operation,
+                attrs["safe_tx_gas"],
+                attrs["base_gas"],
+                attrs["gas_price"],
+                attrs["gas_token"],
+                attrs["refund_receiver"],
+                attrs["nonce"],
+            )
+            # For multichannel, we don't have a safe_tx object, so set preimage to None
+            safe_tx_hash_preimage = None
+        else:
+            # Use standard hash calculation for channel 0 or non-multichannel
+            safe = Safe(safe_address, ethereum_client)
+            safe_tx = safe.build_multisig_tx(
+                tx_to,
+                attrs["value"],
+                attrs["data"],
+                tx_operation,
+                attrs["safe_tx_gas"],
+                attrs["base_gas"],
+                attrs["gas_price"],
+                attrs["gas_token"],
+                attrs["refund_receiver"],
+                safe_nonce=attrs["nonce"],
+            )
+            safe_tx_hash = safe_tx.safe_tx_hash
+            safe_tx_hash_preimage = safe_tx.safe_tx_hash_preimage
 
         # Check safe tx hash matches
         if safe_tx_hash != attrs["contract_transaction_hash"]:
             raise ValidationError(
                 f"Contract-transaction-hash={to_0x_hex_str(safe_tx_hash)} "
-                f"does not match provided contract-tx-hash={to_0x_hex_str(attrs['contract_transaction_hash'])}"
+                f"does not match provided "
+                f"contract-tx-hash={to_0x_hex_str(attrs['contract_transaction_hash'])}"
             )
 
-        # Check there's not duplicated tx with same `nonce` or same `safeTxHash` for the same Safe.
+        # Check there's not duplicated tx with same `channel` and `nonce`
+        # or same `safeTxHash` for the same Safe.
         # We allow duplicated if existing tx is not executed
         multisig_transactions = MultisigTransaction.objects.filter(
-            safe=safe_address, nonce=attrs["nonce"]
+            safe=safe_address,
+            channel=attrs["channel"],
+            nonce=attrs["nonce"],
         ).executed()
         if multisig_transactions:
             for multisig_transaction in multisig_transactions:
@@ -246,8 +295,10 @@ class SafeMultisigTransactionSerializer(SafeMultisigTxSerializer):
                     )
 
             raise ValidationError(
-                f"Tx with nonce={safe_tx.safe_nonce} for safe={safe_address} "
-                f"already executed in tx-hash={multisig_transactions[0].ethereum_tx_id}"
+                f"Tx with channel={attrs['channel']} and "
+                f"nonce={safe_tx.safe_nonce} for safe={safe_address} "
+                f"already executed in "
+                f"tx-hash={multisig_transactions[0].ethereum_tx_id}"
             )
 
         safe_owners = get_safe_owners(safe_address)
@@ -267,7 +318,7 @@ class SafeMultisigTransactionSerializer(SafeMultisigTxSerializer):
         # TODO Make signature mandatory
         signature = attrs.get("signature", b"")
         parsed_signatures = SafeSignature.parse_signature(
-            signature, safe_tx_hash, safe_hash_preimage=safe_tx.safe_tx_hash_preimage
+            signature, safe_tx_hash, safe_hash_preimage=safe_tx_hash_preimage
         )
         attrs["parsed_signatures"] = parsed_signatures
         # If there's at least one signature, transaction is trusted (until signatures are mandatory)
@@ -350,6 +401,7 @@ class SafeMultisigTransactionSerializer(SafeMultisigTxSerializer):
                 "gas_price": self.validated_data["gas_price"],
                 "gas_token": self.validated_data["gas_token"],
                 "refund_receiver": self.validated_data["refund_receiver"],
+                "channel": self.validated_data["channel"],
                 "nonce": self.validated_data["nonce"],
                 "origin": origin,
                 "trusted": trusted,
@@ -730,6 +782,8 @@ class SafeMultisigTransactionResponseSerializer(SafeMultisigTxSerializer):
     proposer = EthereumAddressField()
     proposed_by_delegate = EthereumAddressField(allow_null=True)
     executor = serializers.SerializerMethodField()
+    # Channel for multichannel nonce support
+    channel = serializers.IntegerField()
     value = serializers.CharField()
     is_executed = serializers.BooleanField(source="executed")
     is_successful = serializers.SerializerMethodField()
@@ -895,6 +949,15 @@ class SafeInfoResponseSerializer(serializers.Serializer):
     fallback_handler = EthereumAddressField()
     guard = EthereumAddressField()
     version = serializers.CharField(allow_null=True)
+
+
+class SafeMultichannelNonceResponseSerializer(serializers.Serializer):
+    """
+    Response serializer for multichannel nonce information
+    """
+
+    channel = serializers.IntegerField()
+    nonce = serializers.CharField()
 
 
 class MasterCopyResponseSerializer(serializers.Serializer):
