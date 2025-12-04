@@ -759,6 +759,9 @@ class SafeTxProcessor(TxProcessor):
                 )
 
                 failed = self.is_failed(ethereum_tx, safe_tx_hash)
+                # Extract channel if present (for multichannel Safe contracts)
+                channel = arguments.get("channel", 0)
+
                 multisig_tx, _ = MultisigTransaction.objects.get_or_create(
                     safe_tx_hash=safe_tx_hash,
                     defaults={
@@ -775,6 +778,7 @@ class SafeTxProcessor(TxProcessor):
                         "gas_token": safe_tx.gas_token,
                         "refund_receiver": safe_tx.refund_receiver,
                         "nonce": safe_tx.safe_nonce,
+                        "channel": channel,  # Support multichannel Safe contracts
                         "signatures": safe_tx.signatures,
                         "failed": failed,
                         "trusted": True,

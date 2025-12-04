@@ -232,9 +232,40 @@ class SafeEventsIndexer(EventsIndexer):
         safe_l2_v1_3_0_contract = get_safe_V1_3_0_contract(self.ethereum_client.w3)
         safe_v1_1_1_contract = get_safe_V1_1_1_contract(self.ethereum_client.w3)
 
+        # Custom Safe contract with multichannel support (1.5.0+multichannel.1)
+        # Modified SafeMultiSigTransaction event with indexed channel parameter
+        from web3 import Web3
+        multichannel_safe_abi = [
+            {
+                "anonymous": False,
+                "inputs": [
+                    {"indexed": True, "name": "channel", "type": "uint256"},
+                    {"indexed": False, "name": "to", "type": "address"},
+                    {"indexed": False, "name": "value", "type": "uint256"},
+                    {"indexed": False, "name": "data", "type": "bytes"},
+                    {"indexed": False, "name": "operation", "type": "uint8"},
+                    {"indexed": False, "name": "safeTxGas", "type": "uint256"},
+                    {"indexed": False, "name": "baseGas", "type": "uint256"},
+                    {"indexed": False, "name": "gasPrice", "type": "uint256"},
+                    {"indexed": False, "name": "gasToken", "type": "address"},
+                    {"indexed": False, "name": "refundReceiver", "type": "address"},
+                    {"indexed": False, "name": "signatures", "type": "bytes"},
+                    {"indexed": False, "name": "additionalInfo", "type": "bytes"},
+                ],
+                "name": "SafeMultiSigTransaction",
+                "type": "event",
+            }
+        ]
+        multichannel_safe_contract = self.ethereum_client.w3.eth.contract(
+            abi=multichannel_safe_abi
+        )
+
         return [
             event
             for event in (
+                # Multichannel Safe (1.5.0+multichannel.1) - must be before standard events
+                multichannel_safe_contract.events.SafeMultiSigTransaction(),
+                # Standard Safe events
                 safe_l2_v1_3_0_contract.events.SafeMultiSigTransaction(),
                 safe_l2_v1_3_0_contract.events.SafeModuleTransaction(),
                 safe_l2_v1_3_0_contract.events.SafeSetup(),
@@ -447,8 +478,128 @@ class SafeEventsIndexer(EventsIndexer):
             internal_tx_decoded.arguments = {
                 "_masterCopy": args.get("masterCopy") or args.get("singleton")
             }
+        elif event_name == "ExecutionSuccess":
+            # ExecutionSuccess event indicates a transaction was executed
+            # Update the MultisigTransaction record to mark it as executed
+            safe_tx_hash = args.get("txHash")
+            if safe_tx_hash:
+                try:
+                    # Convert bytes to hex string if needed
+                    if isinstance(safe_tx_hash, bytes):
+                        safe_tx_hash = to_0x_hex_str(HexBytes(safe_tx_hash))
+
+                    # Find and update the MultisigTransaction
+                    from ..models import MultisigTransaction, EthereumTx
+
+                    multisig_tx = MultisigTransaction.objects.filter(
+                        safe_tx_hash=safe_tx_hash
+                    ).first()
+
+                    if multisig_tx and not multisig_tx.ethereum_tx_id:
+                        # Get or create the EthereumTx
+                        ethereum_tx, _ = EthereumTx.objects.get_or_create(
+                            tx_hash=ethereum_tx_hash,
+                            defaults={
+                                "block": decoded_element["blockNumber"],
+                                "_from": decoded_element["transactionFrom"],
+                                "to": decoded_element["address"],
+                            }
+                        )
+
+                        # Update the MultisigTransaction with execution details
+                        multisig_tx.ethereum_tx = ethereum_tx
+                        multisig_tx.failed = False  # ExecutionSuccess means it succeeded
+                        multisig_tx.trusted = True
+                        multisig_tx.save(update_fields=["ethereum_tx", "failed", "trusted"])
+
+                        # Also create SafeRelevantTransaction to mark this as a relevant transaction
+                        SafeRelevantTransaction.objects.get_or_create(
+                            ethereum_tx=ethereum_tx,
+                            safe=safe_address,
+                            defaults={"timestamp": internal_tx.timestamp},
+                        )
+
+                        logger.info(
+                            "[%s] Updated MultisigTransaction safe_tx_hash=%s with ethereum_tx=%s",
+                            safe_address,
+                            safe_tx_hash,
+                            ethereum_tx_hash_hex,
+                        )
+                    elif not multisig_tx:
+                        logger.warning(
+                            "[%s] ExecutionSuccess for safe_tx_hash=%s but MultisigTransaction not found",
+                            safe_address,
+                            safe_tx_hash,
+                        )
+                except Exception as e:
+                    logger.error(
+                        "[%s] Error updating MultisigTransaction for ExecutionSuccess: %s",
+                        safe_address,
+                        str(e),
+                    )
+            internal_tx_decoded = None
+        elif event_name == "ExecutionFailure":
+            # ExecutionFailure event indicates a transaction execution failed
+            # Update the MultisigTransaction record to mark it as failed
+            safe_tx_hash = args.get("txHash")
+            if safe_tx_hash:
+                try:
+                    # Convert bytes to hex string if needed
+                    if isinstance(safe_tx_hash, bytes):
+                        safe_tx_hash = to_0x_hex_str(HexBytes(safe_tx_hash))
+
+                    # Find and update the MultisigTransaction
+                    from ..models import MultisigTransaction, EthereumTx
+
+                    multisig_tx = MultisigTransaction.objects.filter(
+                        safe_tx_hash=safe_tx_hash
+                    ).first()
+
+                    if multisig_tx and not multisig_tx.ethereum_tx_id:
+                        # Get or create the EthereumTx
+                        ethereum_tx, _ = EthereumTx.objects.get_or_create(
+                            tx_hash=ethereum_tx_hash,
+                            defaults={
+                                "block": decoded_element["blockNumber"],
+                                "_from": decoded_element["transactionFrom"],
+                                "to": decoded_element["address"],
+                            }
+                        )
+
+                        # Update the MultisigTransaction with execution details
+                        multisig_tx.ethereum_tx = ethereum_tx
+                        multisig_tx.failed = True  # ExecutionFailure means it failed
+                        multisig_tx.trusted = True
+                        multisig_tx.save(update_fields=["ethereum_tx", "failed", "trusted"])
+
+                        # Also create SafeRelevantTransaction to mark this as a relevant transaction
+                        SafeRelevantTransaction.objects.get_or_create(
+                            ethereum_tx=ethereum_tx,
+                            safe=safe_address,
+                            defaults={"timestamp": internal_tx.timestamp},
+                        )
+
+                        logger.info(
+                            "[%s] Updated MultisigTransaction safe_tx_hash=%s with ethereum_tx=%s (failed)",
+                            safe_address,
+                            safe_tx_hash,
+                            ethereum_tx_hash_hex,
+                        )
+                    elif not multisig_tx:
+                        logger.warning(
+                            "[%s] ExecutionFailure for safe_tx_hash=%s but MultisigTransaction not found",
+                            safe_address,
+                            safe_tx_hash,
+                        )
+                except Exception as e:
+                    logger.error(
+                        "[%s] Error updating MultisigTransaction for ExecutionFailure: %s",
+                        safe_address,
+                        str(e),
+                    )
+            internal_tx_decoded = None
         else:
-            # 'SignMsg', 'ExecutionFailure', 'ExecutionSuccess',
+            # 'SignMsg',
             # 'ExecutionFromModuleSuccess', 'ExecutionFromModuleFailure'
             internal_tx_decoded = None
 
