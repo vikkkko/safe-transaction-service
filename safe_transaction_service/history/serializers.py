@@ -296,7 +296,7 @@ class SafeMultisigTransactionSerializer(SafeMultisigTxSerializer):
 
             raise ValidationError(
                 f"Tx with channel={attrs['channel']} and "
-                f"nonce={safe_tx.safe_nonce} for safe={safe_address} "
+                f"nonce={attrs['nonce']} for safe={safe_address} "
                 f"already executed in "
                 f"tx-hash={multisig_transactions[0].ethereum_tx_id}"
             )
