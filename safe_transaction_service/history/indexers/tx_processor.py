@@ -45,6 +45,7 @@ from ..models import (
     SafeRelevantTransaction,
     SafeStatus,
 )
+from ..utils import calculate_safe_tx_hash_multichannel, supports_multichannel
 
 logger = logging.getLogger(__name__)
 
@@ -733,24 +734,69 @@ class SafeTxProcessor(TxProcessor):
                 else:
                     base_gas = arguments["dataGas"]
                     safe_version = "0.0.1"
-                safe_tx = SafeTx(
-                    None,
-                    contract_address,
-                    arguments["to"],
-                    arguments["value"],
-                    arguments["data"],
-                    arguments["operation"],
-                    arguments["safeTxGas"],
-                    base_gas,
-                    arguments["gasPrice"],
-                    arguments["gasToken"],
-                    arguments["refundReceiver"],
-                    HexBytes(arguments["signatures"]),
-                    safe_nonce=nonce,
-                    safe_version=safe_version,
-                    chain_id=self.ethereum_client.get_chain_id(),
+                signatures = HexBytes(arguments["signatures"])
+                tx_data = HexBytes(arguments["data"]) if arguments["data"] else b""
+                channel = arguments.get("channel", 0)
+                is_multichannel = ("channel" in arguments) or supports_multichannel(
+                    safe_version
                 )
-                safe_tx_hash = safe_tx.safe_tx_hash
+
+                if is_multichannel:
+                    # Multichannel Safe uses channel as first parameter when hashing
+                    safe_tx_hash = calculate_safe_tx_hash_multichannel(
+                        self.ethereum_client,
+                        contract_address,
+                        channel,
+                        arguments["to"],
+                        arguments["value"],
+                        tx_data,
+                        arguments["operation"],
+                        arguments["safeTxGas"],
+                        base_gas,
+                        arguments["gasPrice"],
+                        arguments["gasToken"],
+                        arguments["refundReceiver"],
+                        nonce,
+                    )
+                    tx_to = arguments["to"]
+                    tx_value = arguments["value"]
+                    tx_operation = arguments["operation"]
+                    tx_safe_tx_gas = arguments["safeTxGas"]
+                    tx_base_gas = base_gas
+                    tx_gas_price = arguments["gasPrice"]
+                    tx_gas_token = arguments["gasToken"]
+                    tx_refund_receiver = arguments["refundReceiver"]
+                    tx_signatures = signatures
+                    tx_data_for_db = tx_data if tx_data else None
+                else:
+                    safe_tx = SafeTx(
+                        None,
+                        contract_address,
+                        arguments["to"],
+                        arguments["value"],
+                        arguments["data"],
+                        arguments["operation"],
+                        arguments["safeTxGas"],
+                        base_gas,
+                        arguments["gasPrice"],
+                        arguments["gasToken"],
+                        arguments["refundReceiver"],
+                        signatures,
+                        safe_nonce=nonce,
+                        safe_version=safe_version,
+                        chain_id=self.ethereum_client.get_chain_id(),
+                    )
+                    safe_tx_hash = safe_tx.safe_tx_hash
+                    tx_to = safe_tx.to
+                    tx_value = safe_tx.value
+                    tx_operation = safe_tx.operation
+                    tx_safe_tx_gas = safe_tx.safe_tx_gas
+                    tx_base_gas = safe_tx.base_gas
+                    tx_gas_price = safe_tx.gas_price
+                    tx_gas_token = safe_tx.gas_token
+                    tx_refund_receiver = safe_tx.refund_receiver
+                    tx_signatures = safe_tx.signatures
+                    tx_data_for_db = safe_tx.data if safe_tx.data else None
                 logger.debug(
                     "[%s] Processing transaction execution. nonce=%d safe-tx-hash=%s",
                     contract_address,
@@ -759,8 +805,6 @@ class SafeTxProcessor(TxProcessor):
                 )
 
                 failed = self.is_failed(ethereum_tx, safe_tx_hash)
-                # Extract channel if present (for multichannel Safe contracts)
-                channel = arguments.get("channel", 0)
 
                 multisig_tx, _ = MultisigTransaction.objects.get_or_create(
                     safe_tx_hash=safe_tx_hash,
@@ -768,18 +812,18 @@ class SafeTxProcessor(TxProcessor):
                         "created": internal_tx.timestamp,
                         "safe": contract_address,
                         "ethereum_tx": ethereum_tx,
-                        "to": safe_tx.to,
-                        "value": safe_tx.value,
-                        "data": safe_tx.data if safe_tx.data else None,
-                        "operation": safe_tx.operation,
-                        "safe_tx_gas": safe_tx.safe_tx_gas,
-                        "base_gas": safe_tx.base_gas,
-                        "gas_price": safe_tx.gas_price,
-                        "gas_token": safe_tx.gas_token,
-                        "refund_receiver": safe_tx.refund_receiver,
-                        "nonce": safe_tx.safe_nonce,
+                        "to": tx_to,
+                        "value": tx_value,
+                        "data": tx_data_for_db,
+                        "operation": tx_operation,
+                        "safe_tx_gas": tx_safe_tx_gas,
+                        "base_gas": tx_base_gas,
+                        "gas_price": tx_gas_price,
+                        "gas_token": tx_gas_token,
+                        "refund_receiver": tx_refund_receiver,
+                        "nonce": nonce,
                         "channel": channel,  # Support multichannel Safe contracts
-                        "signatures": safe_tx.signatures,
+                        "signatures": tx_signatures,
                         "failed": failed,
                         "trusted": True,
                     },
@@ -801,7 +845,7 @@ class SafeTxProcessor(TxProcessor):
                     )
 
                 for safe_signature in SafeSignature.parse_signature(
-                    safe_tx.signatures, safe_tx_hash
+                    tx_signatures, safe_tx_hash
                 ):
                     (
                         multisig_confirmation,
