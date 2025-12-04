@@ -387,9 +387,11 @@ class SafeMultisigTransactionSerializer(SafeMultisigTxSerializer):
             proposed_by_delegate = self.validated_data["sender"]
 
         multisig_transaction, created = MultisigTransaction.objects.get_or_create(
-            safe_tx_hash=safe_tx_hash,
+            safe=self.validated_data["safe"],
+            channel=self.validated_data["channel"],
+            nonce=self.validated_data["nonce"],
             defaults={
-                "safe": self.validated_data["safe"],
+                "safe_tx_hash": safe_tx_hash,
                 "to": self.validated_data["to"],
                 "value": self.validated_data["value"],
                 "data": (
@@ -401,8 +403,6 @@ class SafeMultisigTransactionSerializer(SafeMultisigTxSerializer):
                 "gas_price": self.validated_data["gas_price"],
                 "gas_token": self.validated_data["gas_token"],
                 "refund_receiver": self.validated_data["refund_receiver"],
-                "channel": self.validated_data["channel"],
-                "nonce": self.validated_data["nonce"],
                 "origin": origin,
                 "trusted": trusted,
                 "proposer": proposer,
