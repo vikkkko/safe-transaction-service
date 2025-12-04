@@ -1633,12 +1633,10 @@ class MultisigTransaction(TimeStampedModel):
                 fields=["safe", "channel", "nonce"],
             ),
         ]
-        constraints = [
-            models.UniqueConstraint(
-                fields=["safe", "channel", "nonce"],
-                name="unique_safe_channel_nonce",
-            ),
-        ]
+        # Removed unique_safe_channel_nonce constraint to allow multiple
+        # transaction proposals with same (safe, channel, nonce)
+        # safeTxHash is the unique identifier for each transaction
+        constraints = []
 
     def __str__(self):
         return f"{self.safe} - {self.nonce} - {self.safe_tx_hash}"

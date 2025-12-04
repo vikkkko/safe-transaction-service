@@ -386,53 +386,31 @@ class SafeMultisigTransactionSerializer(SafeMultisigTxSerializer):
             )
             proposed_by_delegate = self.validated_data["sender"]
 
-        # First try to get by safe_tx_hash (primary identifier)
-        try:
-            multisig_transaction = MultisigTransaction.objects.get(
-                safe_tx_hash=safe_tx_hash
-            )
-            created = False
-        except MultisigTransaction.DoesNotExist:
-            # Check if a different transaction with same (safe, channel, nonce) exists
-            existing_tx = MultisigTransaction.objects.filter(
-                safe=self.validated_data["safe"],
-                channel=self.validated_data["channel"],
-                nonce=self.validated_data["nonce"],
-            ).first()
-
-            if existing_tx:
-                # A different transaction with same (safe, channel, nonce) exists
-                # This is a replacement transaction - reject it or handle specially
-                raise ValidationError(
-                    f"Transaction with channel={self.validated_data['channel']} "
-                    f"and nonce={self.validated_data['nonce']} already exists "
-                    f"with different safeTxHash: {existing_tx.safe_tx_hash.hex()}. "
-                    f"Cannot create duplicate transaction."
-                )
-
-            # Create new transaction
-            multisig_transaction = MultisigTransaction.objects.create(
-                safe_tx_hash=safe_tx_hash,
-                safe=self.validated_data["safe"],
-                to=self.validated_data["to"],
-                value=self.validated_data["value"],
-                data=(
+        # Use safeTxHash as the unique identifier
+        # Allow multiple transactions with same (safe, channel, nonce)
+        multisig_transaction, created = MultisigTransaction.objects.get_or_create(
+            safe_tx_hash=safe_tx_hash,
+            defaults={
+                "safe": self.validated_data["safe"],
+                "to": self.validated_data["to"],
+                "value": self.validated_data["value"],
+                "data": (
                     self.validated_data["data"] if self.validated_data["data"] else None
                 ),
-                operation=self.validated_data["operation"],
-                safe_tx_gas=self.validated_data["safe_tx_gas"],
-                base_gas=self.validated_data["base_gas"],
-                gas_price=self.validated_data["gas_price"],
-                gas_token=self.validated_data["gas_token"],
-                refund_receiver=self.validated_data["refund_receiver"],
-                channel=self.validated_data["channel"],
-                nonce=self.validated_data["nonce"],
-                origin=origin,
-                trusted=trusted,
-                proposer=proposer,
-                proposed_by_delegate=proposed_by_delegate,
-            )
-            created = True
+                "operation": self.validated_data["operation"],
+                "safe_tx_gas": self.validated_data["safe_tx_gas"],
+                "base_gas": self.validated_data["base_gas"],
+                "gas_price": self.validated_data["gas_price"],
+                "gas_token": self.validated_data["gas_token"],
+                "refund_receiver": self.validated_data["refund_receiver"],
+                "channel": self.validated_data["channel"],
+                "nonce": self.validated_data["nonce"],
+                "origin": origin,
+                "trusted": trusted,
+                "proposer": proposer,
+                "proposed_by_delegate": proposed_by_delegate,
+            },
+        )
 
         if not created and trusted and not multisig_transaction.trusted:
             multisig_transaction.origin = origin
